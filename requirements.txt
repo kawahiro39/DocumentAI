@@ -4,3 +4,4 @@ requests==2.32.3
 google-cloud-documentai==3.5.0
 pytest==8.3.5
 httpx==0.28.1
+python-multipart==0.0.20

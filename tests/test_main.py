@@ -10,16 +10,18 @@ from app.main import app
 client = TestClient(app)
 
 
-def test_process_document_success(monkeypatch):
+def test_process_document_success_from_json(monkeypatch):
     monkeypatch.setattr(
         "app.main.fetch_file_bytes",
         lambda _: b"binary-image-content",
     )
 
-    mock_doc = SimpleNamespace(_pb={
-        "text": "Hello World",
-        "entities": [{"type": "invoice_id", "mention_text": "123"}],
-    })
+    mock_doc = SimpleNamespace(
+        _pb={
+            "text": "Hello World",
+            "entities": [{"type": "invoice_id", "mention_text": "123"}],
+        }
+    )
     mock_client = Mock()
     mock_client.processor_path.return_value = (
         "projects/test-project/locations/us/processors/processor-123"
@@ -46,6 +48,36 @@ def test_process_document_success(monkeypatch):
             "entities": [{"type": "invoice_id", "mention_text": "123"}],
         }
     }
+    mock_client.processor_path.assert_called_once_with(
+        project="test-project",
+        location="us",
+        processor="processor-123",
+    )
+    mock_client.process_document.assert_called_once()
+
+
+def test_process_document_success_from_multipart(monkeypatch):
+    mock_doc = SimpleNamespace(_pb={"text": "Uploaded image"})
+    mock_client = Mock()
+    mock_client.processor_path.return_value = (
+        "projects/test-project/locations/us/processors/processor-123"
+    )
+    mock_client.process_document.return_value = SimpleNamespace(document=mock_doc)
+    monkeypatch.setattr("app.main.documentai.DocumentProcessorServiceClient", lambda: mock_client)
+    monkeypatch.setattr("app.main.MessageToDict", lambda pb: pb)
+
+    response = client.post(
+        "/document-ai/process",
+        data={
+            "project_id": "test-project",
+            "location": "us",
+            "processor_id": "processor-123",
+        },
+        files={"file": ("sample.jpg", b"binary-image-content", "image/jpeg")},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"document": {"text": "Uploaded image"}}
     mock_client.processor_path.assert_called_once_with(
         project="test-project",
         location="us",
@@ -88,7 +120,7 @@ def test_process_document_uses_processor_version(monkeypatch):
     )
 
 
-def test_invalid_mime_type_returns_validation_error():
+def test_invalid_mime_type_returns_validation_error_for_json():
     response = client.post(
         "/document-ai/process",
         json={
@@ -104,6 +136,24 @@ def test_invalid_mime_type_returns_validation_error():
     payload = response.json()
     assert payload["error"] is True
     assert "mime_type" in payload["message"]
+
+
+def test_invalid_mime_type_returns_validation_error_for_multipart():
+    response = client.post(
+        "/document-ai/process",
+        data={
+            "project_id": "test-project",
+            "location": "us",
+            "processor_id": "processor-123",
+            "mime_type": "image/gif",
+        },
+        files={"file": ("sample.jpg", b"binary-image-content", "image/jpeg")},
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["error"] is True
+    assert "mime_type must be one of image/jpeg, image/png, or application/pdf" in payload["message"]
 
 
 def test_file_fetch_failure_returns_error(monkeypatch):
@@ -129,4 +179,21 @@ def test_file_fetch_failure_returns_error(monkeypatch):
     assert response.json() == {
         "error": True,
         "message": "Failed to fetch file: boom",
+    }
+
+
+def test_unsupported_content_type_returns_error():
+    response = client.post(
+        "/document-ai/process",
+        data={
+            "project_id": "test-project",
+            "location": "us",
+            "processor_id": "processor-123",
+        },
+    )
+
+    assert response.status_code == 415
+    assert response.json() == {
+        "error": True,
+        "message": "Content-Type must be application/json or multipart/form-data",
     }
