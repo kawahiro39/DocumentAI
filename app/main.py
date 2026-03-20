@@ -61,7 +61,7 @@ class ErrorResponse(BaseModel):
 
 app = FastAPI(
     title="Document AI Relay API",
-    version="1.1.0",
+    version="1.2.0",
     description="Relay API for Bubble to Google Document AI processing.",
 )
 
@@ -198,6 +198,81 @@ async def process_document_from_form(request: Request) -> dict:
     )
 
 
+def extract_text_from_text_anchor(text_anchor: dict[str, Any], full_text: str) -> str:
+    text_segments = text_anchor.get("textSegments", [])
+    parts: list[str] = []
+
+    for segment in text_segments:
+        start_index = int(segment.get("startIndex", 0) or 0)
+        end_index = int(segment.get("endIndex", 0) or 0)
+        if end_index > start_index:
+            parts.append(full_text[start_index:end_index])
+
+    return "".join(parts).strip()
+
+
+
+def collect_entity_fields(
+    entities: list[dict[str, Any]],
+    full_text: str,
+    *,
+    parent: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+
+    for entity in entities:
+        field_name = entity.get("type") or entity.get("mentionText") or "unknown"
+        if parent:
+            field_name = f"{parent}.{field_name}"
+
+        value = (
+            entity.get("mentionText")
+            or entity.get("normalizedValue", {}).get("text")
+            or extract_text_from_text_anchor(entity.get("textAnchor", {}), full_text)
+            or ""
+        )
+
+        items.append(
+            {
+                "field": field_name,
+                "value": value,
+                "confidence": entity.get("confidence"),
+            }
+        )
+
+        properties = entity.get("properties", [])
+        if properties:
+            items.extend(collect_entity_fields(properties, full_text, parent=field_name))
+
+    return items
+
+
+
+def summarize_document_fields(document: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    fields = collect_entity_fields(document.get("entities", []), document.get("text", ""))
+    return {"fields": fields}
+
+
+async def resolve_document_from_request(request: Request) -> dict:
+    content_type = request.headers.get("content-type", "")
+
+    if content_type.startswith("application/json"):
+        try:
+            payload = JsonProcessRequestBody.model_validate(await request.json())
+        except ValidationError as exc:
+            raise RequestValidationError(exc.errors()) from exc
+
+        return process_document_from_url(payload)
+
+    if content_type.startswith("multipart/form-data"):
+        return await process_document_from_form(request)
+
+    raise HTTPException(
+        status_code=415,
+        detail="Content-Type must be application/json or multipart/form-data",
+    )
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(_, exc: HTTPException):
     detail = exc.detail
@@ -241,22 +316,23 @@ def health_check() -> dict[str, str]:
     responses={400: {"model": ErrorResponse}, 415: {"model": ErrorResponse}, 422: {"model": ErrorResponse}},
 )
 async def document_ai_process(request: Request) -> dict:
-    content_type = request.headers.get("content-type", "")
+    document = await resolve_document_from_request(request)
+    return {"document": document}
 
-    if content_type.startswith("application/json"):
-        try:
-            payload = JsonProcessRequestBody.model_validate(await request.json())
-        except ValidationError as exc:
-            raise RequestValidationError(exc.errors()) from exc
 
-        document = process_document_from_url(payload)
-        return {"document": document}
+@app.post(
+    "/document-ai/process/raw",
+    responses={400: {"model": ErrorResponse}, 415: {"model": ErrorResponse}, 422: {"model": ErrorResponse}},
+)
+async def document_ai_process_raw(request: Request) -> dict:
+    document = await resolve_document_from_request(request)
+    return {"document": document}
 
-    if content_type.startswith("multipart/form-data"):
-        document = await process_document_from_form(request)
-        return {"document": document}
 
-    raise HTTPException(
-        status_code=415,
-        detail="Content-Type must be application/json or multipart/form-data",
-    )
+@app.post(
+    "/document-ai/process/fields",
+    responses={400: {"model": ErrorResponse}, 415: {"model": ErrorResponse}, 422: {"model": ErrorResponse}},
+)
+async def document_ai_process_fields(request: Request) -> dict:
+    document = await resolve_document_from_request(request)
+    return summarize_document_fields(document)
