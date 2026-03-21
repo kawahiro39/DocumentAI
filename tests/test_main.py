@@ -93,11 +93,46 @@ def test_process_fields_success_from_json(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {
-        "fields": [
-            {"field": "invoice_id", "value": "123", "confidence": 0.98},
-            {"field": "supplier", "value": "OpenAI", "confidence": 0.91},
-            {"field": "supplier.name", "value": "OpenAI", "confidence": 0.91},
-        ]
+        "fields": {
+            "invoice_id": {"value": "123", "confidence": 0.98},
+            "supplier": {"value": "OpenAI", "confidence": 0.91},
+            "supplier.name": {"value": "OpenAI", "confidence": 0.91},
+        }
+    }
+
+
+def test_process_fields_groups_duplicate_field_names(monkeypatch):
+    monkeypatch.setattr("app.main.fetch_file_bytes", lambda _: b"binary-image-content")
+    mock_document_client(
+        monkeypatch,
+        {
+            "text": "Line items",
+            "entities": [
+                {"type": "line_item", "mentionText": "Taxi", "confidence": 0.95},
+                {"type": "line_item", "mentionText": "Train", "confidence": 0.9},
+            ],
+        },
+    )
+
+    response = client.post(
+        "/document-ai/process/fields",
+        json={
+            "file_url": "https://example.com/sample.jpg",
+            "mime_type": "image/jpeg",
+            "project_id": "test-project",
+            "location": "us",
+            "processor_id": "processor-123",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "fields": {
+            "line_item": [
+                {"value": "Taxi", "confidence": 0.95},
+                {"value": "Train", "confidence": 0.9},
+            ]
+        }
     }
 
 
@@ -106,7 +141,7 @@ def test_process_fields_success_from_multipart(monkeypatch):
         monkeypatch,
         {
             "text": "Receipt Total 1999",
-            "entities": [{"type": "total", "mentionText": "1999", "confidence": 0.88}],
+            "entities": [{"type": "total_amount", "mentionText": "1999", "confidence": 0.88}],
         },
     )
 
@@ -122,9 +157,9 @@ def test_process_fields_success_from_multipart(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {
-        "fields": [
-            {"field": "total", "value": "1999", "confidence": 0.88},
-        ]
+        "fields": {
+            "total_amount": {"value": "1999", "confidence": 0.88},
+        }
     }
 
 

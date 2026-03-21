@@ -248,8 +248,26 @@ def collect_entity_fields(
 
 
 
-def summarize_document_fields(document: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    fields = collect_entity_fields(document.get("entities", []), document.get("text", ""))
+def summarize_document_fields(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    field_items = collect_entity_fields(document.get("entities", []), document.get("text", ""))
+    fields: dict[str, Any] = {}
+
+    for item in field_items:
+        field_name = item["field"]
+        field_value = {
+            "value": item["value"],
+            "confidence": item["confidence"],
+        }
+
+        if field_name not in fields:
+            fields[field_name] = field_value
+            continue
+
+        if not isinstance(fields[field_name], list):
+            fields[field_name] = [fields[field_name]]
+
+        fields[field_name].append(field_value)
+
     return {"fields": fields}
 
 
