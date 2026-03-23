@@ -3,6 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from google.api_core.client_options import ClientOptions
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -20,14 +22,16 @@ def mock_document_client(monkeypatch, document_payload):
         "projects/test-project/locations/us/processors/processor-123/processorVersions/version-1"
     )
     mock_client.process_document.return_value = SimpleNamespace(document=mock_doc)
-    monkeypatch.setattr("app.main.documentai.DocumentProcessorServiceClient", lambda: mock_client)
+
+    client_factory = Mock(return_value=mock_client)
+    monkeypatch.setattr("app.main.documentai.DocumentProcessorServiceClient", client_factory)
     monkeypatch.setattr("app.main.MessageToDict", lambda pb: pb)
-    return mock_client
+    return mock_client, client_factory
 
 
 def test_process_raw_document_success_from_json(monkeypatch):
     monkeypatch.setattr("app.main.fetch_file_bytes", lambda _: b"binary-image-content")
-    mock_client = mock_document_client(
+    mock_client, _ = mock_document_client(
         monkeypatch,
         {
             "text": "Hello World",
@@ -62,7 +66,7 @@ def test_process_raw_document_success_from_json(monkeypatch):
 
 def test_process_fields_success_from_json(monkeypatch):
     monkeypatch.setattr("app.main.fetch_file_bytes", lambda _: b"binary-image-content")
-    mock_document_client(
+    _, _ = mock_document_client(
         monkeypatch,
         {
             "text": "Invoice Number 123",
@@ -103,7 +107,7 @@ def test_process_fields_success_from_json(monkeypatch):
 
 def test_process_fields_groups_duplicate_field_names(monkeypatch):
     monkeypatch.setattr("app.main.fetch_file_bytes", lambda _: b"binary-image-content")
-    mock_document_client(
+    _, _ = mock_document_client(
         monkeypatch,
         {
             "text": "Line items",
@@ -137,7 +141,7 @@ def test_process_fields_groups_duplicate_field_names(monkeypatch):
 
 
 def test_process_fields_success_from_multipart(monkeypatch):
-    mock_document_client(
+    _, _ = mock_document_client(
         monkeypatch,
         {
             "text": "Receipt Total 1999",
@@ -165,7 +169,7 @@ def test_process_fields_success_from_multipart(monkeypatch):
 
 def test_process_document_uses_processor_version(monkeypatch):
     monkeypatch.setattr("app.main.fetch_file_bytes", lambda _: b"pdf")
-    mock_client = mock_document_client(monkeypatch, {"text": "versioned", "entities": []})
+    mock_client, client_factory = mock_document_client(monkeypatch, {"text": "versioned", "entities": []})
 
     response = client.post(
         "/document-ai/process/raw",
@@ -187,6 +191,33 @@ def test_process_document_uses_processor_version(monkeypatch):
         processor="processor-123",
         processor_version="version-1",
     )
+
+    client_factory.assert_called_once()
+    client_options = client_factory.call_args.kwargs["client_options"]
+    assert isinstance(client_options, ClientOptions)
+    assert client_options.api_endpoint == "us-documentai.googleapis.com"
+
+
+def test_process_document_uses_regional_endpoint(monkeypatch):
+    monkeypatch.setattr("app.main.fetch_file_bytes", lambda _: b"pdf")
+    _, client_factory = mock_document_client(monkeypatch, {"text": "regional", "entities": []})
+
+    response = client.post(
+        "/document-ai/process/raw",
+        json={
+            "file_url": "https://example.com/sample.pdf",
+            "mime_type": "application/pdf",
+            "project_id": "test-project",
+            "location": "asia-southeast1",
+            "processor_id": "processor-123",
+        },
+    )
+
+    assert response.status_code == 200
+    client_factory.assert_called_once()
+    client_options = client_factory.call_args.kwargs["client_options"]
+    assert isinstance(client_options, ClientOptions)
+    assert client_options.api_endpoint == "asia-southeast1-documentai.googleapis.com"
 
 
 def test_invalid_mime_type_returns_validation_error_for_json():
