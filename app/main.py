@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from google.api_core import exceptions as google_exceptions
+from google.api_core.client_options import ClientOptions
 from google.cloud import documentai
 from google.protobuf.json_format import MessageToDict
 from pydantic import BaseModel, ConfigDict, HttpUrl, ValidationError, field_validator
@@ -74,6 +75,10 @@ def validate_mime_type(value: str) -> str:
     return value
 
 
+def get_documentai_api_endpoint(location: str) -> str:
+    return f"{location}-documentai.googleapis.com"
+
+
 def build_processor_name(
     client: documentai.DocumentProcessorServiceClient,
     project_id: str,
@@ -133,7 +138,8 @@ def process_document_bytes(
     processor_id: str,
     processor_version: Optional[str],
 ) -> dict:
-    client = documentai.DocumentProcessorServiceClient()
+    client_options = ClientOptions(api_endpoint=get_documentai_api_endpoint(location))
+    client = documentai.DocumentProcessorServiceClient(client_options=client_options)
     processor_name = build_processor_name(
         client=client,
         project_id=project_id,
